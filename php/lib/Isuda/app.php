@@ -26,8 +26,6 @@ function config($key) {
 
 $container = new class extends \Slim\Container {
     public $dbh;
-    public $dbhForIsutar;
-
     public function __construct() {
         parent::__construct();
 
@@ -35,13 +33,6 @@ $container = new class extends \Slim\Container {
             $_ENV['ISUDA_DSN'],
             $_ENV['ISUDA_DB_USER'] ?? 'isucon',
             $_ENV['ISUDA_DB_PASSWORD'] ?? 'isucon',
-            [ PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES utf8mb4" ]
-        ));
-
-        $this->dbhForIsutar = new PDOWrapper(new PDO(
-            $_ENV['ISUTAR_DSN'],
-            $_ENV['ISUTAR_DB_USER'] ?? 'isucon',
-            $_ENV['ISUTAR_DB_PASSWORD'] ?? 'isucon',
             [ PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES utf8mb4" ]
         ));
     }
@@ -79,7 +70,7 @@ $container = new class extends \Slim\Container {
     }
 
     public function load_stars($keyword) {
-        $stars = $this->dbhForIsutar->select_all(
+        $stars = $this->dbh->select_all(
             'SELECT user_name FROM star WHERE keyword = ?'
             , $keyword
         );
@@ -125,10 +116,7 @@ $app->get('/initialize', function (Request $req, Response $c) {
         'DELETE FROM entry WHERE id > 7101'
     );
 
-    $this->dbhForIsutar->query('TRUNCATE star');
-    $origin = config('isutar_origin');
-    $url = "$origin/initialize";
-    file_get_contents($url);
+    $this->dbh->query('TRUNCATE star');
     return render_json($c, [
         'result' => 'ok',
     ]);
@@ -250,7 +238,7 @@ $app->post('/stars', function (Request $req, Response $c) {
     , $keyword);
     if (empty($entry)) return $c->withStatus(404);
 
-    $this->dbhForIsutar->query(
+    $this->dbh->query(
         'INSERT INTO star (keyword, user_name, created_at) VALUES (?, ?, NOW())',
         $keyword,
         $req->getParams()['user']
