@@ -124,6 +124,8 @@ $app->get('/initialize', function (Request $req, Response $c) {
     $this->dbh->query(
         'DELETE FROM entry WHERE id > 7101'
     );
+
+    $this->dbhForIsutar->query('TRUNCATE star');
     $origin = config('isutar_origin');
     $url = "$origin/initialize";
     file_get_contents($url);
@@ -239,6 +241,23 @@ $app->get('/logout', function (Request $req, Response $c) {
     }
     session_destroy();
     return $c->withRedirect('/');
+});
+
+$app->post('/stars', function (Request $req, Response $c) {
+    $keyword = $req->getParams()['keyword'];
+    $entry = $this->dbh->select_row(
+        'SELECT id FROM entry WHERE keyword = ?'
+    , $keyword);
+    if (empty($entry)) return $c->withStatus(404);
+
+    $this->dbhForIsutar->query(
+        'INSERT INTO star (keyword, user_name, created_at) VALUES (?, ?, NOW())',
+        $keyword,
+        $req->getParams()['user']
+    );
+    return render_json($c, [
+        'result' => 'ok',
+    ]);
 });
 
 $app->get('/keyword/{keyword}', function (Request $req, Response $c) {

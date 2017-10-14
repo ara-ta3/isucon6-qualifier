@@ -22,7 +22,6 @@ $container = new class extends \Slim\Container {
 $app = new \Slim\App($container);
 
 $app->get('/initialize', function (Request $req, Response $c) {
-    $this->dbh->query('TRUNCATE star');
     return render_json($c, [
         'result' => 'ok',
     ]);
