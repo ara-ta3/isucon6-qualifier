@@ -79,9 +79,8 @@ $container = new class extends \Slim\Container {
     }
 
     public function load_stars($keyword) {
-        // こっちに持ってくる
         $stars = $this->dbhForIsutar->select_all(
-            'SELECT * FROM star WHERE keyword = ?'
+            'SELECT user_name FROM star WHERE keyword = ?'
             , $keyword
         );
         return $stars;
