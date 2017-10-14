@@ -42,14 +42,17 @@ $container = new class extends \Slim\Container {
             return '';
         }
         $keywords = $this->dbh->select_all(
-            'SELECT * FROM entry ORDER BY CHARACTER_LENGTH(keyword) DESC'
+            'SELECT keyword FROM entry ORDER BY CHARACTER_LENGTH(keyword) DESC'
         );
         $kw2sha = [];
 
         // NOTE: avoid pcre limitation "regular expression is too large at offset"
+        // でかすぎるので500個ずつ区切ってる
         for ($i = 0; !empty($kwtmp = array_slice($keywords, 500 * $i, 500)); $i++) {
+            // quotemetaしてkeywordを|でくっつけてるだけ
             $re = implode('|', array_map(function ($keyword) { return quotemeta($keyword['keyword']); }, $kwtmp));
             preg_replace_callback("/($re)/", function ($m) use (&$kw2sha) {
+                // m = matched
                 $kw = $m[1];
                 return $kw2sha[$kw] = "isuda_" . sha1($kw);
             }, $content);
@@ -66,6 +69,7 @@ $container = new class extends \Slim\Container {
     }
 
     public function load_stars($keyword) {
+        // こっちに持ってくる
         $keyword = rawurlencode($keyword);
         $origin = config('isutar_origin');
         $url = "{$origin}/stars?keyword={$keyword}";
