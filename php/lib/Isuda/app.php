@@ -26,6 +26,8 @@ function config($key) {
 
 $container = new class extends \Slim\Container {
     public $dbh;
+    public $dbhForIsutar;
+
     public function __construct() {
         parent::__construct();
 
@@ -35,7 +37,15 @@ $container = new class extends \Slim\Container {
             $_ENV['ISUDA_DB_PASSWORD'] ?? 'isucon',
             [ PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES utf8mb4" ]
         ));
+
+        $this->dbhForIsutar = new PDOWrapper(new PDO(
+            $_ENV['ISUTAR_DSN'],
+            $_ENV['ISUTAR_DB_USER'] ?? 'isucon',
+            $_ENV['ISUTAR_DB_PASSWORD'] ?? 'isucon',
+            [ PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES utf8mb4" ]
+        ));
     }
+
 
     public function htmlify($content) {
         if (!isset($content)) {
@@ -70,14 +80,11 @@ $container = new class extends \Slim\Container {
 
     public function load_stars($keyword) {
         // こっちに持ってくる
-        $keyword = rawurlencode($keyword);
-        $origin = config('isutar_origin');
-        $url = "{$origin}/stars?keyword={$keyword}";
-        $ua = new \GuzzleHttp\Client;
-        $res = $ua->request('GET', $url)->getBody();
-        $data = json_decode($res, true);
-
-        return $data['stars'];
+        $stars = $this->dbhForIsutar->select_all(
+            'SELECT * FROM star WHERE keyword = ?'
+            , $keyword
+        );
+        return $stars;
     }
 };
 $container['view'] = function ($container) {
