@@ -140,7 +140,7 @@ $app->get('/', function (Request $req, Response $c) {
     unset($entry);
 
     $total_entries = $this->dbh->select_one(
-        'SELECT COUNT(*) FROM entry'
+        'SELECT COUNT(id) FROM entry'
     );
     $last_page = ceil($total_entries / $PER_PAGE);
     $pages = range(max(1, $page-5), min($last_page, $page+5));
