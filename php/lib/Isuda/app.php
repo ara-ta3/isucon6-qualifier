@@ -293,11 +293,6 @@ $app->post('/stars', function (Request $req, Response $c) {
     if (empty($entry)) return $c->withStatus(404);
 
     $user = $req->getParams()['user'];
-    $this->dbh->query(
-        'INSERT INTO star (keyword, user_name, created_at) VALUES (?, ?, NOW())',
-        $keyword,
-        $user
-    );
     $this->putStarToRedis($keyword, $user);
     return render_json($c, [
         'result' => 'ok',
