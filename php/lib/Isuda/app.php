@@ -26,6 +26,7 @@ function config($key) {
 
 $container = new class extends \Slim\Container {
     public $dbh;
+    public $redis;
     public function __construct() {
         parent::__construct();
 
@@ -35,23 +36,33 @@ $container = new class extends \Slim\Container {
             $_ENV['ISUDA_DB_PASSWORD'] ?? 'isucon',
             [ PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES utf8mb4" ]
         ));
+        $this->redis = new \Redis();
+        $this->redis->connect('127.0.0.1');
     }
 
-
-    public function htmlify($content) {
-        if (!isset($content)) {
-            return '';
-        }
+    public function buildRegularExpression() {
         $keywords = $this->dbh->select_all(
-            'SELECT keyword FROM entry ORDER BY CHARACTER_LENGTH(keyword) DESC'
+            'SELECT keyword FROM entry'
+//            'SELECT keyword FROM entry ORDER BY CHARACTER_LENGTH(keyword) DESC'
         );
-        $kw2sha = [];
+        $res = [];
 
         // NOTE: avoid pcre limitation "regular expression is too large at offset"
         // でかすぎるので500個ずつ区切ってる
         for ($i = 0; !empty($kwtmp = array_slice($keywords, 500 * $i, 500)); $i++) {
             // quotemetaしてkeywordを|でくっつけてるだけ
             $re = implode('|', array_map(function ($keyword) { return quotemeta($keyword['keyword']); }, $kwtmp));
+            $res[] = $re;
+        }
+        $this->redis->set('regular', serialize($res));
+    }
+
+    public function htmlify($content, $regulars) {
+        if (!isset($content)) {
+            return '';
+        }
+        $kw2sha = [];
+        foreach($regulars as $re) {
             preg_replace_callback("/($re)/", function ($m) use (&$kw2sha) {
                 // m = matched
                 $kw = $m[1];
@@ -69,7 +80,23 @@ $container = new class extends \Slim\Container {
         return nl2br($content, true);
     }
 
-    public function load_stars($keyword) {
+    public function loadStarsByKeywords($keys) {
+        $stars = $this->dbh->select_all(
+            'SELECT keyword, user_name FROM star WHERE keyword IN (?)'
+            , $keys
+        );
+        $keyword2UserName = [];
+        foreach($stars as $s) {
+            if(!isset($keyword2UserName[$s['keyword']])) {
+                $keyword2UserName[$s['keyword']] = [];
+            }
+            $keyword2UserName[$s['keyword']][] = $s['user_name'];
+        }
+        return $keyword2UserName;
+
+    }
+
+    public function load_stars($keyword):array {
         $stars = $this->dbh->select_all(
             'SELECT user_name FROM star WHERE keyword = ?'
             , $keyword
@@ -86,6 +113,11 @@ $container['view'] = function ($container) {
     return $view;
 };
 $container['stash'] = new \Pimple\Container;
+//$settings = $container->get('settings');
+//$settings->replace([
+//    'displayErrorDetails' => true,
+//    'debug' => true
+//]);
 $app = new \Slim\App($container);
 
 $mw = [];
@@ -117,6 +149,7 @@ $app->get('/initialize', function (Request $req, Response $c) {
     );
 
     $this->dbh->query('TRUNCATE star');
+    $this->buildRegularExpression();
     return render_json($c, [
         'result' => 'ok',
     ]);
@@ -133,10 +166,16 @@ $app->get('/', function (Request $req, Response $c) {
         "LIMIT $PER_PAGE ".
         "OFFSET $offset"
     );
+    $s = $this->redis->get('regular');
+    $regulars = unserialize($s);
+
+//    $keywords = [];
     foreach ($entries as &$entry) {
-        $entry['html']  = $this->htmlify($entry['description']);
+        $entry['html']  = $this->htmlify($entry['description'], $regulars);
         $entry['stars'] = $this->load_stars($entry['keyword']);
+//        $keywords[] = $entry['keyword'];
     }
+//    $keyword2UserNames = $this->loadStarsByKeywords($keywords);
     unset($entry);
 
     $total_entries = $this->dbh->select_one(
@@ -145,7 +184,14 @@ $app->get('/', function (Request $req, Response $c) {
     $last_page = ceil($total_entries / $PER_PAGE);
     $pages = range(max(1, $page-5), min($last_page, $page+5));
 
-    $this->view->render($c, 'index.twig', [ 'entries' => $entries, 'page' => $page, 'last_page' => $last_page, 'pages' => $pages, 'stash' => $this->get('stash') ]);
+    $this->view->render($c, 'index.twig', [ 
+        'entries' => $entries,
+        'page' => $page,
+        'last_page' => $last_page,
+        'pages' => $pages,
+        'stash' => $this->get('stash') ,
+//        'stars' => $keyword2UserNames,
+    ]);
 })->add($mw['set_name'])->setName('/');
 
 $app->get('/robots.txt', function (Request $req, Response $c) {
@@ -169,7 +215,7 @@ $app->post('/keyword', function (Request $req, Response $c) {
         .' ON DUPLICATE KEY UPDATE'
         .' author_id = ?, keyword = ?, description = ?, updated_at = NOW()'
     , $user_id, $keyword, $description, $user_id, $keyword, $description);
-
+    $this->buildRegularExpression();
     return $c->withRedirect('/');
 })->add($mw['authenticate'])->add($mw['set_name']);
 
@@ -257,7 +303,10 @@ $app->get('/keyword/{keyword}', function (Request $req, Response $c) {
         .' WHERE keyword = ?'
     , $keyword);
     if (empty($entry)) return $c->withStatus(404);
-    $entry['html'] = $this->htmlify($entry['description']);
+    $s = $this->redis->get('regular');
+    $regulars = unserialize($s);
+
+    $entry['html'] = $this->htmlify($entry['description'], $regulars);
     $entry['stars'] = $this->load_stars($entry['keyword']);
 
     return $this->view->render($c, 'keyword.twig', [
@@ -278,6 +327,7 @@ $app->post('/keyword/{keyword}', function (Request $req, Response $c) {
     if (empty($entry)) return $c->withStatus(404);
 
     $this->dbh->query('DELETE FROM entry WHERE keyword = ?', $keyword);
+    $this->buildRegularExpression();
     return $c->withRedirect('/');
 })->add($mw['authenticate'])->add($mw['set_name']);
 
