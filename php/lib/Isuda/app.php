@@ -54,6 +54,7 @@ $container = new class extends \Slim\Container {
             $re = implode('|', array_map(function ($keyword) { return quotemeta($keyword['keyword']); }, $kwtmp));
             $res[] = $re;
         }
+        $this->redis->select(0);
         $this->redis->set('regular', serialize($res));
     }
 
@@ -80,28 +81,36 @@ $container = new class extends \Slim\Container {
         return nl2br($content, true);
     }
 
-    public function loadStarsByKeywords($keys) {
-        $stars = $this->dbh->select_all(
-            'SELECT keyword, user_name FROM star WHERE keyword IN (?)'
-            , $keys
-        );
-        $keyword2UserName = [];
-        foreach($stars as $s) {
-            if(!isset($keyword2UserName[$s['keyword']])) {
-                $keyword2UserName[$s['keyword']] = [];
-            }
-            $keyword2UserName[$s['keyword']][] = $s['user_name'];
-        }
-        return $keyword2UserName;
-
-    }
-
     public function load_stars($keyword):array {
         $stars = $this->dbh->select_all(
             'SELECT user_name FROM star WHERE keyword = ?'
             , $keyword
         );
         return $stars;
+    }
+
+    public function putStarToRedis($keyword, $userName): array {
+        $this->redis->select(1);
+        $current = $this->redis->get($keyword);
+        if ($current === false) {
+            $current = [];
+        } else {
+            $current = unserialize($current);
+        }
+        $current[] = $userName;
+        $this->redis->set($keyword, serialize($current));
+        return $current;
+    }
+
+    public function loadStarsFromRedis($keyword): array {
+        $this->redis->select(1);
+        $current = $this->redis->get($keyword);
+        if ($current === false) {
+            $current = [];
+        } else {
+            $current = unserialize($current);
+        }
+        return $current;
     }
 };
 $container['view'] = function ($container) {
@@ -149,6 +158,7 @@ $app->get('/initialize', function (Request $req, Response $c) {
     );
 
     $this->dbh->query('TRUNCATE star');
+    $this->redis->flushAll();
     $this->buildRegularExpression();
     return render_json($c, [
         'result' => 'ok',
@@ -166,16 +176,15 @@ $app->get('/', function (Request $req, Response $c) {
         "LIMIT $PER_PAGE ".
         "OFFSET $offset"
     );
+
+    $this->redis->select(0);
     $s = $this->redis->get('regular');
     $regulars = unserialize($s);
 
-//    $keywords = [];
     foreach ($entries as &$entry) {
         $entry['html']  = $this->htmlify($entry['description'], $regulars);
-        $entry['stars'] = $this->load_stars($entry['keyword']);
-//        $keywords[] = $entry['keyword'];
+        $entry['starsRedis'] = $this->loadStarsFromRedis($entry['keyword']);
     }
-//    $keyword2UserNames = $this->loadStarsByKeywords($keywords);
     unset($entry);
 
     $total_entries = $this->dbh->select_one(
@@ -189,8 +198,7 @@ $app->get('/', function (Request $req, Response $c) {
         'page' => $page,
         'last_page' => $last_page,
         'pages' => $pages,
-        'stash' => $this->get('stash') ,
-//        'stars' => $keyword2UserNames,
+        'stash' => $this->get('stash'),
     ]);
 })->add($mw['set_name'])->setName('/');
 
@@ -284,11 +292,13 @@ $app->post('/stars', function (Request $req, Response $c) {
     , $keyword);
     if (empty($entry)) return $c->withStatus(404);
 
+    $user = $req->getParams()['user'];
     $this->dbh->query(
         'INSERT INTO star (keyword, user_name, created_at) VALUES (?, ?, NOW())',
         $keyword,
-        $req->getParams()['user']
+        $user
     );
+    $this->putStarToRedis($keyword, $user);
     return render_json($c, [
         'result' => 'ok',
     ]);
@@ -303,11 +313,13 @@ $app->get('/keyword/{keyword}', function (Request $req, Response $c) {
         .' WHERE keyword = ?'
     , $keyword);
     if (empty($entry)) return $c->withStatus(404);
+
+    $this->redis->select(0);
     $s = $this->redis->get('regular');
     $regulars = unserialize($s);
 
     $entry['html'] = $this->htmlify($entry['description'], $regulars);
-    $entry['stars'] = $this->load_stars($entry['keyword']);
+    $entry['starsRedis'] = $this->loadStarsFromRedis($entry['keyword']);
 
     return $this->view->render($c, 'keyword.twig', [
         'entry' => $entry, 'stash' => $this->get('stash')
